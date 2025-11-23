@@ -116,7 +116,7 @@ int gerirPedidoTruco(int sock_pediu, int sock_responde, int& valor_mao, int nive
     }
     else if (msg_resposta == resposta_valida[1]) { // CORRO
         std::string info_venceu = "INFO:Oponente correu! Você ganha " + std::to_string(pontos_se_correr) + " pontos.\n";
-        std::string info_perdeu = "INFO:Você correu! Você perde " + std::to_string(pontos_se_correr) + " pontos.\n";
+        std::string info_perdeu = "INFO:Você correu! Você perdeu.\n";
         send(sock_pediu, info_venceu.c_str(), info_venceu.length(), 0);
         send(sock_responde, info_perdeu.c_str(), info_perdeu.length(), 0);
 
@@ -134,23 +134,59 @@ int gerirPedidoTruco(int sock_pediu, int sock_responde, int& valor_mao, int nive
         return (sock_pediu == sock1 ? 1 : 2); // J1 ou J2 ganha
     }
 }
+/**
+ * @brief Gere a aposta de Envido.
+ * @return O valor final da aposta para o vencedor (ou 0 se cancelado/erro).
+ */
+int gerirPedidoEnvido(int sock_pediu, int sock_responde, int nivel, int& quem_ganhou_envido, int sock1) {
+    std::string pedido;
+    std::string resposta_valida[3];
+    int pontos_se_correr;
+    int valor_se_aceitar;
 
-/**
- * @brief Thread principal para cada sala.
- * (Máquina de estados completa do jogo)
- */
-/**
- * @brief Thread principal para cada sala.
- * (Máquina de estados completa do jogo)
- */
-/**
- * @brief Thread principal para cada sala.
- * (Implementa a lógica do jogo e o PLACAR TOTAL)
- */
-/**
- * @brief Thread principal para cada sala.
- * (Implementa a lógica da FLOR que não termina a mão)
- */
+    if (nivel == 1) { // Pedido de ENVIDO (Vale 2 se aceitar, 1 se correr)
+        pedido = "PEDIDO_ENVIDO\n";
+        resposta_valida[0] = "ACEITO"; 
+        resposta_valida[1] = "CORRO"; 
+        resposta_valida[2] = "REAL ENVIDO";
+        pontos_se_correr = 1; 
+        valor_se_aceitar = 2;
+    } else { // Pedido de REAL ENVIDO (Vale 5 se aceitar, 2 se correr)
+        pedido = "PEDIDO_REAL_ENVIDO\n";
+        resposta_valida[0] = "ACEITO"; 
+        resposta_valida[1] = "CORRO"; 
+        resposta_valida[2] = "";
+        pontos_se_correr = 2; // Se correr do Real Envido, paga os 2 do Envido que já estava na mesa
+        valor_se_aceitar = 5; 
+    }
+
+    send(sock_responde, pedido.c_str(), pedido.length(), 0);
+    
+    std::string msg_resposta;
+    if (!lerDoSocket(sock_responde, msg_resposta)) return 0;
+
+    if (msg_resposta == "ACEITO") {
+        return valor_se_aceitar; 
+    } else if (msg_resposta == "CORRO") {
+        quem_ganhou_envido = sock_pediu;
+        
+        std::string msg_venceu = "INFO:Oponente correu do Envido! Voce ganhou os pontos.\n";
+        std::string msg_perdeu = "INFO:Voce correu do Envido.\n";
+        
+        // CORREÇÃO: Usar .length() para evitar envio de lixo de memória
+        send(sock_pediu, msg_venceu.c_str(), msg_venceu.length(), 0);
+        send(sock_responde, msg_perdeu.c_str(), msg_perdeu.length(), 0);
+        return pontos_se_correr; 
+    } else if (msg_resposta == "REAL ENVIDO" && nivel == 1) {
+        // Aumentou a aposta (Recursão)
+        return gerirPedidoEnvido(sock_responde, sock_pediu, nivel + 1, quem_ganhou_envido, sock1);
+    } else {
+        // Resposta inválida conta como correr
+        quem_ganhou_envido = sock_pediu;
+        return pontos_se_correr; 
+    }
+}
+
 void* handle_room(void* arg) {
     Room* room = (Room*)arg;
     int sock1 = -1, sock2 = -1;
@@ -160,6 +196,12 @@ void* handle_room(void* arg) {
     int proximo_a_comecar_mao_sock = -1;
 
     while (true) {
+    
+        
+        // ADICIONE ESTAS DUAS LINHAS:
+        bool envido_cantado = false; 
+        bool houve_flor = false; 
+        
         pthread_mutex_lock(&room->mutex);
         while (room->client_count < CLIENTS_PER_ROOM) {
             pthread_cond_wait(&room->cond_full, &room->mutex);
@@ -198,17 +240,47 @@ void* handle_room(void* arg) {
         // --- NOVO: Verificação de FLOR (Pré-Rodada) ---
         bool j1_tem_flor = temFlor(maos[sock1]);
         bool j2_tem_flor = temFlor(maos[sock2]);
+        if (j1_tem_flor || j2_tem_flor) houve_flor = true;
 
         if (j1_tem_flor && !j2_tem_flor) {
             pontos_jogo_j1 += 3;
-            send(sock1, "INFO:Você tem Flor! Ganha 3 pontos.\n", 37, 0);
-            send(sock2, "INFO:Oponente tem Flor! Ele ganha 3 pontos.\n", 45, 0);
+            std::string msg_j1 = "INFO:Voce tem Flor! Ganha 3 pontos.\n";
+            std::string msg_j2 = "INFO:Oponente tem Flor! Ele ganha 3 pontos.\n";
+            send(sock1, msg_j1.c_str(), msg_j1.length(), 0);
+            send(sock2, msg_j2.c_str(), msg_j2.length(), 0);
         } else if (j2_tem_flor && !j1_tem_flor) {
             pontos_jogo_j2 += 3;
-            send(sock2, "INFO:Você tem Flor! Ganha 3 pontos.\n", 37, 0);
-            send(sock1, "INFO:Oponente tem Flor! Ele ganha 3 pontos.\n", 45, 0);
+            std::string msg_j2 = "INFO:Voce tem Flor! Ganha 3 pontos.\n";
+            std::string msg_j1 = "INFO:Oponente tem Flor! Ele ganha 3 pontos.\n";
+            send(sock2, msg_j2.c_str(), msg_j2.length(), 0);
+            send(sock1, msg_j1.c_str(), msg_j1.length(), 0);
         } else if (j1_tem_flor && j2_tem_flor) {
-            enviarParaAmbos(sock1, sock2, "INFO:Flor contra Flor! Ninguém pontua.\n");
+            // --- CONTRA FLOR (Ambos têm Flor) ---
+            // 1. Calcula os pontos como se fosse Envido
+            int pts1 = calcularEnvido(maos[sock1]);
+            int pts2 = calcularEnvido(maos[sock2]);
+
+            // 2. Mostra os pontos para todos
+            std::string info = "INFO:CONTRA FLOR! J1 tem " + std::to_string(pts1) + " pontos | J2 tem " + std::to_string(pts2) + " pontos.\n";
+            enviarParaAmbos(sock1, sock2, info);
+
+            // 3. Define o vencedor (vale 6 pontos)
+            if (pts1 > pts2) {
+                pontos_jogo_j1 += 6;
+                enviarParaAmbos(sock1, sock2, "INFO:Jogador 1 venceu a Contra Flor! (+6 pts)\n");
+            } else if (pts2 > pts1) {
+                pontos_jogo_j2 += 6;
+                enviarParaAmbos(sock1, sock2, "INFO:Jogador 2 venceu a Contra Flor! (+6 pts)\n");
+            } else {
+                // Empate: Ganha quem é "mão" (quem começou a rodada)
+                if (quem_comeca_rodada == sock1) {
+                    pontos_jogo_j1 += 6;
+                    enviarParaAmbos(sock1, sock2, "INFO:Empate na Contra Flor! J1 ganha por ser mão (+6 pts).\n");
+                } else {
+                    pontos_jogo_j2 += 6;
+                    enviarParaAmbos(sock1, sock2, "INFO:Empate na Contra Flor! J2 ganha por ser mão (+6 pts).\n");
+                }
+            }
         }
         // (Se nenhum tem flor, nada acontece)
         // --- Fim da Verificação de FLOR ---
@@ -232,10 +304,45 @@ void* handle_room(void* arg) {
             bool turno_segundo_terminado = false;
             
             // --- Turno do primeiro jogador ---
+// --- Turno do primeiro jogador ---
             while (!turno_primeiro_terminado) {
                 send(primeiro_sock, "SUA_VEZ\n", 8, 0);
                 std::string msg_cliente;
                 if (!lerDoSocket(primeiro_sock, msg_cliente)) { vencedor_mao = (primeiro_sock == sock1 ? 2 : 1); break; }
+
+                // --- LÓGICA ENVIDO JOGADOR 1 (NOVO) ---
+                if (msg_cliente == "ENVIDO") {
+                    if (rodada == 1 && !envido_cantado && ultimo_pediu_truco == 0 && !houve_flor) {
+                        envido_cantado = true;
+                        int ganhador_correu = -1;
+                        // 'primeiro_sock' pede, 'segundo_sock' responde
+                        int pontos_envido = gerirPedidoEnvido(primeiro_sock, segundo_sock, 1, ganhador_correu, sock1);
+                        
+                        if (ganhador_correu != -1) { 
+                            if (ganhador_correu == sock1) {
+                            pontos_jogo_j1 += pontos_envido;
+                             } 
+                             else{ 
+                                pontos_jogo_j2 += pontos_envido;
+                             }
+                        } else { 
+                            int pts1 = calcularEnvido(maos[sock1]); int pts2 = calcularEnvido(maos[sock2]);
+                            std::string show = "INFO:Pontos Envido -> J1: " + std::to_string(pts1) + " | J2: " + std::to_string(pts2) + "\n";
+                            enviarParaAmbos(sock1, sock2, show);
+                            if (pts1 > pts2) { pontos_jogo_j1 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Jogador 1 venceu Envido!\n"); }
+                            else if (pts2 > pts1) { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Jogador 2 venceu Envido!\n"); }
+                            else { // Empate
+                                if (quem_comeca_rodada == sock1) { pontos_jogo_j1 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J1 ganha (mao).\n"); }
+                                else { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J2 ganha (mao).\n"); }
+                            }
+                        }
+                        send(sock1, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n").c_str(), 0, 0);
+                        send(sock2, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n").c_str(), 0, 0);
+                        continue; 
+                    } else {
+                        send(primeiro_sock, "INFO:Envido não permitido agora.\n", 30, 0); continue;
+                    }
+                }
 
                 if (msg_cliente.rfind("JOGAR:", 0) == 0) {
                     int index = std::stoi(msg_cliente.substr(6));
@@ -252,16 +359,50 @@ void* handle_room(void* arg) {
                     ultimo_pediu_truco = (primeiro_sock == sock1 ? 1 : 2);
                     vencedor_mao = gerirPedidoTruco(primeiro_sock, segundo_sock, valor_mao, 1, sock1);
                     if (vencedor_mao != 0) break;
-                
                 } else { send(primeiro_sock, "INFO:Comando inválido.\n", 22, 0); }
             }
-            if (vencedor_mao != 0) break; 
+            if (vencedor_mao != 0) break;
 
             // --- Turno do segundo jogador ---
             while (!turno_segundo_terminado) {
                 send(segundo_sock, "SUA_VEZ\n", 8, 0);
                 std::string msg_cliente;
                 if (!lerDoSocket(segundo_sock, msg_cliente)) { vencedor_mao = (segundo_sock == sock1 ? 2 : 1); break; }
+
+                // --- LÓGICA ENVIDO JOGADOR 2 (O QUE FALTAVA) ---
+                if (msg_cliente == "ENVIDO") {
+                    if (rodada == 1 && !envido_cantado && ultimo_pediu_truco == 0 && !houve_flor) {
+                        envido_cantado = true;
+                        int ganhador_correu = -1;
+                        // NOTA: Aqui 'segundo_sock' pede, 'primeiro_sock' responde
+                        int pontos_envido = gerirPedidoEnvido(segundo_sock, primeiro_sock, 1, ganhador_correu, sock1);
+                        
+                        if (ganhador_correu != -1) { 
+                            if (ganhador_correu == sock1) 
+                            {
+                                pontos_jogo_j1 += pontos_envido;
+                            } 
+                            else {
+                                pontos_jogo_j2 += pontos_envido;
+                            }
+                        } else { 
+                            int pts1 = calcularEnvido(maos[sock1]); int pts2 = calcularEnvido(maos[sock2]);
+                            std::string show = "INFO:Pontos Envido -> J1: " + std::to_string(pts1) + " | J2: " + std::to_string(pts2) + "\n";
+                            enviarParaAmbos(sock1, sock2, show);
+                            if (pts1 > pts2) { pontos_jogo_j1 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Jogador 1 venceu Envido!\n"); }
+                            else if (pts2 > pts1) { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Jogador 2 venceu Envido!\n"); }
+                            else { 
+                                if (quem_comeca_rodada == sock1) { pontos_jogo_j1 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J1 ganha (mao).\n"); }
+                                else { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J2 ganha (mao).\n"); }
+                            }
+                        }
+                        send(sock1, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n").c_str(), 0, 0);
+                        send(sock2, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n").c_str(), 0, 0);
+                        continue; 
+                    } else {
+                        send(segundo_sock, "INFO:Envido não permitido agora.\n", 30, 0); continue;
+                    }
+                }
 
                 if (msg_cliente.rfind("JOGAR:", 0) == 0) {
                     int index = std::stoi(msg_cliente.substr(6));
@@ -281,29 +422,29 @@ void* handle_room(void* arg) {
                 
                 } else { send(segundo_sock, "INFO:Comando inválido.\n", 22, 0); }
             }
-            if (vencedor_mao != 0) break; 
+            if (vencedor_mao != 0) break;
 
             // --- 4. Comparação da Rodada ---
             int resultado = compararCartas(carta_primeiro, carta_segundo);
-
+            
             if (resultado == 1) { 
                 if (primeiro_sock == sock1) rodadas_j1++; else rodadas_j2++; 
                 quem_comeca_rodada = primeiro_sock;
                 send(primeiro_sock, "INFO_JOGADA:Voce ganhou a rodada!\n", 32, 0);
-                send(segundo_sock, "INFO_JOGADA:Voce perdeu a rodada.\n", 31, 0);
+                send(segundo_sock, "INFO_JOGADA:Voce perdeu a rodada.\n", 32, 0);
             } else if (resultado == -1) { 
                 if (segundo_sock == sock1) rodadas_j1++; else rodadas_j2++; 
                 quem_comeca_rodada = segundo_sock;
                 send(segundo_sock, "INFO_JOGADA:Voce ganhou a rodada!\n", 32, 0);
-                send(primeiro_sock, "INFO_JOGADA:Voce perdeu a rodada.\n", 31, 0);
+                send(primeiro_sock, "INFO_JOGADA:Voce perdeu a rodada.\n", 32, 0);
             } else { 
                 quem_comeca_rodada = primeiro_sock;
                 send(primeiro_sock, "INFO_JOGADA:Empatou (cangou)!\n", 29, 0);
                 send(segundo_sock, "INFO_JOGADA:Empatou (cangou)!\n", 29, 0);
             }
 
-            std::string placar_m1 = "PLACAR:" + std::to_string(rodadas_j1) + "," + std::to_string(rodadas_j2) + "\n";
-            std::string placar_m2 = "PLACAR:" + std::to_string(rodadas_j2) + "," + std::to_string(rodadas_j1) + "\n";
+            std::string placar_m1 = "\nPLACAR:" + std::to_string(rodadas_j1) + "," + std::to_string(rodadas_j2) + "\n";
+            std::string placar_m2 = "\nPLACAR:" + std::to_string(rodadas_j2) + "," + std::to_string(rodadas_j1) + "\n";
             send(sock1, placar_m1.c_str(), placar_m1.length(), 0);
             send(sock2, placar_m2.c_str(), placar_m2.length(), 0);
 
