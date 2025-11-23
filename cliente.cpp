@@ -8,45 +8,63 @@
 #include <pthread.h>
 #include <sstream>
 #include <vector>
-#include "cartas.h" // As suas definições de cartas
-#include "regras.h" // A sua lógica de 'getForca'
-#include <mutex>    // Para std::mutex
+#include "cartas.h"
+#include "regras.h"
+#include <mutex>
+#include <algorithm> 
 
-// --- DEFINIÇÕES QUE FALTAVAM ---
 #define PORT 8080
 #define BUFFER_SIZE 1024
-// -------------------------------
 
-// Variáveis globais para controlo de estado
 std::mutex g_mutex;
 bool g_minhaVez = false;
 std::vector<Carta> g_minhaMao;
 
-/**
- * @brief Função de utilidade para reimprimir o prompt.
- * Deve ser chamada DEPOIS de ter travado o 'g_mutex'.
- */
+// <<< MUDANÇA AQUI: Novos estados para o prompt
+enum class EstadoResposta { 
+    NENHUMA, 
+    JOGADA_APENAS,      // Só pode jogar carta
+    JOGADA_OU_TRUCO,    // Pode jogar carta OU pedir truco
+    RESPOSTA_TRUCO, 
+    RESPOSTA_RETRUCO, 
+    RESPOSTA_VALE4 
+};
+EstadoResposta g_estadoEsperado = EstadoResposta::NENHUMA;
+
+// <<< MUDANÇA AQUI: O prompt agora depende dos novos estados
 void reimprimirPrompt() {
-    if (g_minhaVez) {
-        std::cout << "Digite o número da carta (1 a " << g_minhaMao.size() << "): ";
+    std::cout << "\r" << std::string(80, ' ') << "\r"; 
+    
+    if (g_estadoEsperado == EstadoResposta::JOGADA_OU_TRUCO) {
+        std::cout << "Digite [numero da carta] ou [truco]: ";
+    } else if (g_estadoEsperado == EstadoResposta::JOGADA_APENAS) {
+        std::cout << "Digite [numero da carta]: "; // <<< A CORREÇÃO
+    } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_TRUCO) {
+        std::cout << "Responda com [aceito], [corro] ou [retruco]: ";
+    } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_RETRUCO) {
+        std::cout << "Responda com [aceito], [corro] ou [vale 4]: ";
+    } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_VALE4) {
+        std::cout << "Responda com [aceito] ou [corro]: ";
     } else {
-        std::cout << "> "; // Um prompt simples se não for nossa vez
+        std::cout << "> "; 
     }
-    fflush(stdout); // Força a impressão
+    fflush(stdout);
 }
 
-/**
- * @brief Thread para receber e interpretar mensagens do servidor.
- */
-/**
- * @brief Thread para receber e interpretar mensagens do servidor.
- * (Versão corrigida com parser C++ e limpeza de linha)
- */
+std::string toLower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    return s;
+}
+
 void* receive_messages(void* arg) {
     int sock = *(int*)arg;
     char buffer[BUFFER_SIZE];
     int bytes_read;
     std::string msgBuffer = "";
+
+    // <<< MUDANÇA AQUI: Controla se a aposta já foi aceite nesta mão
+    bool aposta_aceita_nesta_mao = false;
 
     while ((bytes_read = read(sock, buffer, BUFFER_SIZE - 1)) > 0) {
         buffer[bytes_read] = '\0';
@@ -58,29 +76,23 @@ void* receive_messages(void* arg) {
             msgBuffer.erase(0, pos + 1); 
 
             std::lock_guard<std::mutex> lock(g_mutex); 
+            std::cout << "\r" << std::string(80, ' ') << "\r"; 
 
-            std::cout << "\r" << std::string(80, ' ') << "\r";
-
-            // ----- Lógica de Interpretação (Corrigida) -----
-
-            try { // Adiciona um try-catch para evitar que o cliente quebre
+            try {
                 if (mensagem.rfind("HAND:", 0) == 0) {
+                    aposta_aceita_nesta_mao = false; // <<< MUDANÇA: Reseta aposta
                     std::cout << "\n=== SUA MÃO ===" << std::endl;
+                    // ... (resto do código de HAND:) ...
                     g_minhaMao.clear();
                     std::string maoData = mensagem.substr(5); 
                     std::stringstream ss_mao(maoData);
                     std::string segmentoCarta;
                     int i = 1;
-                    while (std::getline(ss_mao, segmentoCarta, ';')) { // "VAL,NAI"
-                        std::stringstream ss_carta(segmentoCarta);
-                        std::string segmentoNum;
+                    while (std::getline(ss_mao, segmentoCarta, ';')) {
+                        std::stringstream ss_carta(segmentoCarta); std::string s;
                         int val, nai;
-
-                        std::getline(ss_carta, segmentoNum, ',');
-                        val = std::stoi(segmentoNum);
-                        std::getline(ss_carta, segmentoNum, ',');
-                        nai = std::stoi(segmentoNum);
-                        
+                        std::getline(ss_carta, s, ','); val = std::stoi(s);
+                        std::getline(ss_carta, s, ','); nai = std::stoi(s);
                         Carta c((Valor)val, (Naipe)nai);
                         g_minhaMao.push_back(c);
                         std::cout << i++ << ". " << Tradutor::toString(c) << std::endl;
@@ -89,66 +101,97 @@ void* receive_messages(void* arg) {
                 
                 } else if (mensagem.rfind("SUA_VEZ", 0) == 0) {
                     g_minhaVez = true;
+                    // <<< MUDANÇA AQUI: Decide qual estado de JOGADA usar
+                    if (g_estadoEsperado == EstadoResposta::NENHUMA) {
+                        if (aposta_aceita_nesta_mao) {
+                            g_estadoEsperado = EstadoResposta::JOGADA_APENAS;
+                        } else {
+                            g_estadoEsperado = EstadoResposta::JOGADA_OU_TRUCO;
+                        }
+                    }
                     std::cout << "\n--- SUA VEZ ---" << std::endl;
                 
+                } else if (mensagem.rfind("PEDIDO_TRUCO", 0) == 0) {
+                    g_minhaVez = true;
+                    g_estadoEsperado = EstadoResposta::RESPOSTA_TRUCO;
+                    std::cout << "\n!!! OPONENTE PEDIU TRUCO !!!" << std::endl;
+                
+                } else if (mensagem.rfind("PEDIDO_RETRUCO", 0) == 0) {
+                    g_minhaVez = true;
+                    g_estadoEsperado = EstadoResposta::RESPOSTA_RETRUCO;
+                    std::cout << "\n!!! OPONENTE PEDIU RETRUCO !!!" << std::endl;
+                
+                } else if (mensagem.rfind("PEDIDO_VALE_QUATRO", 0) == 0) {
+                    g_minhaVez = true;
+                    g_estadoEsperado = EstadoResposta::RESPOSTA_VALE4;
+                    std::cout << "\n!!! OPONENTE PEDIU VALE QUATRO !!!" << std::endl;
+                
                 } else if (mensagem.rfind("VOCE_JOGOU:", 0) == 0) {
-                    std::string data = mensagem.substr(11); // "VAL,NAI"
-                    std::stringstream ss_data(data);
-                    std::string segmento;
-                    int val, nai;
-
-                    std::getline(ss_data, segmento, ','); val = std::stoi(segmento);
-                    std::getline(ss_data, segmento, ','); nai = std::stoi(segmento);
-                    
+                    // ... (código de VOCE_JOGOU:) ...
+                    std::string data = mensagem.substr(11); std::stringstream ss_data(data);
+                    std::string s; int val, nai;
+                    std::getline(ss_data, s, ','); val = std::stoi(s);
+                    std::getline(ss_data, s, ','); nai = std::stoi(s);
                     Carta c_jogada((Valor)val, (Naipe)nai);
                     std::cout << "Você jogou: " << Tradutor::toString(c_jogada) << std::endl;
                     for (auto it = g_minhaMao.begin(); it != g_minhaMao.end(); ++it) {
                         if (it->valor == c_jogada.valor && it->naipe == c_jogada.naipe) {
-                            g_minhaMao.erase(it);
-                            break;
+                            g_minhaMao.erase(it); break;
                         }
                     }
                 
                 } else if (mensagem.rfind("OPONENTE_JOGOU:", 0) == 0) {
-                    std::string data = mensagem.substr(16); // "VAL,NAI"
-                    std::stringstream ss_data(data);
-                    std::string segmento;
-                    int val, nai;
-
-                    std::getline(ss_data, segmento, ','); val = std::stoi(segmento);
-                    std::getline(ss_data, segmento, ','); nai = std::stoi(segmento);
-
+                    // (Mantendo o seu bloco de código)
+                    std::string data = mensagem.substr(15); 
+                    size_t pos = data.find(',');
+                    int val = std::stoi(data.substr(0, pos));
+                    int nai = std::stoi(data.substr(pos + 1));
                     std::cout << "Oponente jogou: " << Tradutor::toString(Carta((Valor)val, (Naipe)nai)) << std::endl;
-                
-                } else if (mensagem.rfind("INFO_JOGADA:", 0) == 0) {
-                    std::cout << ">> " << mensagem.substr(12) << std::endl;
-                
+
                 } else if (mensagem.rfind("PLACAR:", 0) == 0) {
-                    std::string data = mensagem.substr(7); // "P1,P2"
-                    std::stringstream ss_data(data);
-                    std::string segmento;
-                    int meu_placar, op_placar;
-
-                    std::getline(ss_data, segmento, ','); meu_placar = std::stoi(segmento);
-                    std::getline(ss_data, segmento, ','); op_placar = std::stoi(segmento);
-
-                    std::cout << "Placar da Mão: Você " << meu_placar << " x " << op_placar << " Oponente" << std::endl;
+                    // ... (código de PLACAR:) ...
+                    std::string data = mensagem.substr(7); std::stringstream ss_data(data);
+                    std::string s; int meu, op;
+                    std::getline(ss_data, s, ','); meu = std::stoi(s);
+                    std::getline(ss_data, s, ','); op = std::stoi(s);
+                    std::cout << "Placar da Mão: Você " << meu << " x " << op << " Oponente" << std::endl;
+                
+                } else if (mensagem.rfind("PLACAR_JOGO:", 0) == 0) {
+                    // ... (código de PLACAR_JOGO:) ...
+                    std::string data = mensagem.substr(12); std::stringstream ss_data(data);
+                    std::string s; int meu, op;
+                    std::getline(ss_data, s, ','); meu = std::stoi(s);
+                    std::getline(ss_data, s, ','); op = std::stoi(s);
+                    std::cout << "\n=================================" << std::endl;
+                    std::cout << "  PLACAR DO JOGO: Voce " << meu << " x " << op << " Oponente" << std::endl;
+                    std::cout << "=================================\n" << std::endl;
                 
                 } else if (mensagem.rfind("FIM_MAO:", 0) == 0) {
                     g_minhaVez = false;
+                    g_estadoEsperado = EstadoResposta::NENHUMA;
                     std::cout << "\n*** " << mensagem.substr(8) << " ***" << std::endl;
                     std::cout << "Aguardando próxima mão...\n" << std::endl;
                 
+                } else if (mensagem.rfind("FIM_JOGO:", 0) == 0) {
+                    // ... (código de FIM_JOGO:) ...
+                    std::cout << "\n*********************************" << std::endl;
+                    std::cout << "*** " << mensagem.substr(9) << " ***" << std::endl;
+                    std::cout << "*********************************" << std::endl;
+                    close(sock);
+                    exit(0); 
+                
+                } else if (mensagem.rfind("INFO:Aposta aceite!", 0) == 0) { // <<< MUDANÇA
+                    aposta_aceita_nesta_mao = true;
+                    std::cout << "INFO: " << mensagem.substr(5) << std::endl;
+                
                 } else {
-                    std::cout << mensagem << std::endl;
+                    std::cout << "INFO: " << mensagem.substr(5) << std::endl;
                 }
             } catch (const std::exception& e) {
-                // Se algo der errado ao ler os números, imprime um erro
                 std::cout << "[ERRO DE PARSING]: " << e.what() << " em " << mensagem << std::endl;
             }
 
-            // Reimprime o prompt
-            reimprimirPrompt();
+            reimprimirPrompt(); 
         }
     }
     if (bytes_read == 0) std::cout << "\nServidor desconectou." << std::endl;
@@ -158,72 +201,84 @@ void* receive_messages(void* arg) {
     exit(0); 
     return NULL;
 }
-/**
- * @brief Thread principal (envio).
- */
+
 int main() {
     int sock = 0;
     struct sockaddr_in serv_addr;
     
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        std::cout << "Erro ao criar socket" << std::endl; return -1;
-    }
-
+    // ... (código de socket(), memset(), inet_pton(), connect()) ...
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) { std::cout << "Socket error" << std::endl; return -1; }
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
-
-    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
-        std::cout << "Endereço inválido" << std::endl; return -1;
-    }
-
-    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        std::cout << "Conexão falhou" << std::endl; return -1;
-    }
-
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) { std::cout << "Addr error" << std::endl; return -1; }
+    if (connect(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) { std::cout << "Connect error" << std::endl; return -1; }
     std::cout << "Conectado ao servidor!" << std::endl;
 
     pthread_t recv_thread;
-    if (pthread_create(&recv_thread, NULL, receive_messages, (void*)&sock) != 0) {
-        perror("pthread_create (recv)"); return -1;
-    }
+    if (pthread_create(&recv_thread, NULL, receive_messages, (void*)&sock) != 0) { perror("pthread_create"); return -1; }
 
-    // Imprime o prompt inicial
-    {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        reimprimirPrompt();
-    }
+    { std::lock_guard<std::mutex> lock(g_mutex); reimprimirPrompt(); }
 
     std::string line;
-    while (std::getline(std::cin, line)) { // Lê do stdin
-        
+    while (std::getline(std::cin, line)) { 
+        std::string comando = toLower(line); 
         std::lock_guard<std::mutex> lock(g_mutex); 
         
-        if (g_minhaVez) {
-            try {
-                int card_num = std::stoi(line); 
-                if (card_num >= 1 && card_num <= g_minhaMao.size()) {
-                    int card_index = card_num - 1;
-                    
-                    std::string msg = "JOGAR:" + std::to_string(card_index) + "\n";
-                    send(sock, msg.c_str(), msg.length(), 0);
-                    
-                    g_minhaVez = false; // Já joguei
-
-                } else {
-                    std::cout << "Número inválido. Digite de 1 a " << g_minhaMao.size() << ": ";
-                    fflush(stdout);
-                }
-            } catch (...) {
-                std::cout << "Comando inválido. Digite um número: ";
-                fflush(stdout);
-            }
-        } else if (line == "quit") {
-            break;
-        } else {
-            // O usuário apertou Enter quando não era sua vez
+        if (!g_minhaVez) {
             std::cout << "\rAguarde sua vez..." << std::endl;
-            reimprimirPrompt(); // Reimprime o prompt (ex: "> ")
+            reimprimirPrompt();
+            continue;
+        }
+
+        std::string msg_enviar = "";
+
+        // <<< MUDANÇA AQUI: Lógica de envio atualizada
+        if (g_estadoEsperado == EstadoResposta::JOGADA_OU_TRUCO) {
+            if (comando == "truco") {
+                msg_enviar = "TRUCO\n";
+            } else {
+                try {
+                    int card_num = std::stoi(comando); 
+                    if (card_num >= 1 && card_num <= g_minhaMao.size()) {
+                        msg_enviar = "JOGAR:" + std::to_string(card_num - 1) + "\n";
+                    }
+                } catch (...) { /* ignora */ }
+            }
+        
+        } else if (g_estadoEsperado == EstadoResposta::JOGADA_APENAS) {
+            // Só aceita jogar carta
+            try {
+                int card_num = std::stoi(comando); 
+                if (card_num >= 1 && card_num <= g_minhaMao.size()) {
+                    msg_enviar = "JOGAR:" + std::to_string(card_num - 1) + "\n";
+                }
+            } catch (...) { /* ignora */ }
+            // Se digitar "truco" aqui, msg_enviar fica vazia e cai no "Comando inválido"
+
+        } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_TRUCO) {
+            if (comando == "aceito") msg_enviar = "ACEITO\n";
+            else if (comando == "corro") msg_enviar = "CORRO\n";
+            else if (comando == "retruco") msg_enviar = "RETRUCO\n";
+        
+        } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_RETRUCO) {
+            if (comando == "aceito") msg_enviar = "ACEITO\n";
+            else if (comando == "corro") msg_enviar = "CORRO\n";
+            else if (comando == "vale 4" || comando == "valequatro" || comando == "vale4") msg_enviar = "VALE_QUATRO\n";
+        
+        } else if (g_estadoEsperado == EstadoResposta::RESPOSTA_VALE4) {
+            if (comando == "aceito") msg_enviar = "ACEITO\n";
+            else if (comando == "corro") msg_enviar = "CORRO\n";
+        }
+        // --- FIM DA LÓGICA DE ESTADO ---
+
+        if (!msg_enviar.empty()) {
+            send(sock, msg_enviar.c_str(), msg_enviar.length(), 0);
+            g_minhaVez = false;
+            g_estadoEsperado = EstadoResposta::NENHUMA; 
+        } else {
+            std::cout << "\rComando inválido." << std::endl;
+            reimprimirPrompt();
         }
     }
 
