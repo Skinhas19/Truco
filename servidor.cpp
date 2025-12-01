@@ -336,8 +336,10 @@ void* handle_room(void* arg) {
                                 else { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J2 ganha (mao).\n"); }
                             }
                         }
-                        send(sock1, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n").c_str(), 0, 0);
-                        send(sock2, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n").c_str(), 0, 0);
+                        std::string p1 = "PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n";
+                            std::string p2 = "PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n";
+                            send(sock1, p1.c_str(), p1.length(), 0);
+                            send(sock2, p2.c_str(), p2.length(), 0);
                         continue; 
                     } else {
                         send(primeiro_sock, "INFO:Envido não permitido agora.\n", 30, 0); continue;
@@ -396,8 +398,10 @@ void* handle_room(void* arg) {
                                 else { pontos_jogo_j2 += pontos_envido; enviarParaAmbos(sock1, sock2, "INFO:Empate Envido, J2 ganha (mao).\n"); }
                             }
                         }
-                        send(sock1, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n").c_str(), 0, 0);
-                        send(sock2, ("PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n").c_str(), 0, 0);
+                        std::string p1 = "PLACAR_JOGO:" + std::to_string(pontos_jogo_j1) + "," + std::to_string(pontos_jogo_j2) + "\n";
+                            std::string p2 = "PLACAR_JOGO:" + std::to_string(pontos_jogo_j2) + "," + std::to_string(pontos_jogo_j1) + "\n";
+                            send(sock1, p1.c_str(), p1.length(), 0);
+                            send(sock2, p2.c_str(), p2.length(), 0);
                         continue; 
                     } else {
                         send(segundo_sock, "INFO:Envido não permitido agora.\n", 30, 0); continue;
@@ -625,3 +629,4 @@ int main() {
 
     return 0;
 }
+
