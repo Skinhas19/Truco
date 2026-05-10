@@ -10,8 +10,8 @@
 #include <vector>
 #include <map>
 #include "cartas.h"
-#include "baralho.h"
-#include "regras.h"
+#include "Baralho.h"
+#include "Regras.h"
 
 #define PORT 8080
 #define NUM_ROOMS 2
