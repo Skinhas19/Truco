@@ -9,7 +9,7 @@
 #include <sstream>
 #include <vector>
 #include "cartas.h"
-#include "regras.h"
+#include "Regras.h"
 #include <mutex>
 #include <algorithm> 
 
