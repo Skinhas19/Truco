@@ -1,1 +1,1 @@
-Trabalho da disciplina de Redes de Computadores onde foi feito um jogo de truco utilzando o protocolo de comunicação TCP/IP.
+Trabalho desenvolvido para a disciplina de Redes de Computadores com o objetivo de implementar um jogo de Truco utilizando o protocolo de comunicação TCP/IP.
